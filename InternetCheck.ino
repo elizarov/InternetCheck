@@ -3,6 +3,8 @@
 #include <SPI.h>
 #include <Ethernet.h>
 
+#include "xprint.h"
+
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
 const uint8_t POWER_PIN = 3;
@@ -30,18 +32,21 @@ char expect[] = "Welcom"; // no repeat chars for simplicity
 uint8_t expectIndex = 0;
 bool expectFound = false;
 
+long connectStartTime;
 
 void setup() {
   // configure power pin (on)
   pinMode(POWER_PIN, OUTPUT);
   digitalWrite(POWER_PIN, 0);
   // serial
-  Serial.begin(115200);
+  setupPrint();
   // DHCP
   uint8_t retry = 0;
   while (true) {
-    Serial.print("DHCP init retry ");
-    Serial.println(retry);
+    waitPrint();
+    Serial.print("{I:DHCP ");
+    Serial.print(retry);
+    Serial.println("}");
     if (Ethernet.begin(mac, DHCP_TIMEOUT)) {
       break;
     }
@@ -55,7 +60,7 @@ void setup() {
 }
 
 void reboot() {
-  Serial.println("Reboot");
+  waitPrintln("{I:reboot}*");
   digitalWrite(POWER_PIN, 1);
   delay(REBOOT_TIME);
   digitalWrite(POWER_PIN, 0);  
@@ -63,25 +68,27 @@ void reboot() {
   delay(BOOT_WAIT_TIME);
 }
 
-void displayIP() {    
-  Serial.print("IP address ");
-  Serial.println(Ethernet.localIP());
+void displayIP() {
+  waitPrint();   
+  Serial.print("{I:address ");
+  Serial.print(Ethernet.localIP());
+  Serial.println("}");
 }
 
 void maintainDHCP() {
   switch (Ethernet.maintain()) {
     case 1: 
-      Serial.println("DHCP renew failed");
+      waitPrintln("{I:DHCP renew failed}*");
       break;
     case 2:
-      Serial.println("DHCP renew success");
+      waitPrintln("{I:DHCP renew success}");
       displayIP();
       break;
     case 3:
-      Serial.println("DHCP rebind failed");
+      waitPrintln("{I:DHCP rebind failed}*");
       break;
     case 4:
-      Serial.println("DHCP rebind success");
+      waitPrintln("{I:DHCP rebind success}");
       displayIP();
       break;
   }  
@@ -91,10 +98,13 @@ void checkConnection() {
   if (readingTimeout.enabled()) return; // reading from connectoin now
   if (!connectionTimeout.check()) return; // not time to reconnect yet
   connectionTimeout.reset(CONNECTION_CHECK_TIME);
-  Serial.print("Connect to ");
-  Serial.println(server);
+  waitPrint();
+  Serial.print("{I:Connect ");
+  Serial.print(server);
+  Serial.println("}");
+  connectStartTime = millis();
   if (!client.connect(server, 80)) { 
-     Serial.println("Connection failed");
+     waitPrintln("[I:0 e1]");
      handleFailure();
      return;
   }
@@ -119,7 +129,7 @@ void checkClientData() {
   if (!readingTimeout.enabled()) return; // not reading 
   if (readingTimeout.check()) {
     // read timed out
-    Serial.println("Read timeout out");
+    waitPrintln("[I:0 e2}");
     client.stop();
     handleFailure();
     return;
@@ -140,10 +150,14 @@ void checkClientData() {
     client.stop();
     readingTimeout.disable();
     if (!expectFound) {
-      Serial.println("Connection no answer");
+      waitPrintln("[I:0 e3]");
       handleFailure();
     } else {
-      Serial.println("Connection success");
+      long delay = millis() - connectStartTime;
+      waitPrint();
+      Serial.print("[I:1 e0 d");
+      Serial.print(delay);
+      Serial.println("]");
       connectFail = 0;
     }
   }
