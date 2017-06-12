@@ -7,9 +7,12 @@
 
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
+const uint8_t LED_PIN = 13; // for boot indication
+const uint8_t BOOT_WAIT = 10; // wait & blink 10 sec on boot
+
 const uint8_t POWER_PIN = 3;
-const long REBOOT_TIME = 5000; // 5 sec -- with power off
-const long BOOT_WAIT_TIME = 10000; // 10 sec -- after during power on
+const long REBOOT_TIME = 3000; // 3 sec -- with power off
+const long BOOT_WAIT_TIME = 10000; // 10 sec -- after power on
 
 const long DHCP_TIMEOUT = 30000; // 30 sec 
 const uint8_t DHCP_RETRIES = 4;
@@ -17,7 +20,7 @@ const uint8_t DHCP_RETRIES = 4;
 char server[] = "apps.vsegda.org";
 EthernetClient client;
 
-const long REBOOT_GRACE_TIME = 60000; // 1 min
+const long REBOOT_GRACE_TIME = 40000; // 40 sec
 
 const long CONNECTION_CHECK_TIME = 20000; // check every 20 sec
 Timeout connectionTimeout(REBOOT_GRACE_TIME); // first check -- after reboot grace time
@@ -32,6 +35,9 @@ char expect[] = "Welcom"; // no repeat chars for simplicity
 uint8_t expectIndex = 0;
 bool expectFound = false;
 
+const long STATUS_TIME = 50000; // 50s -- don't send status too often
+Timeout statusTimeout(0);
+
 long connectStartTime;
 
 void setup() {
@@ -40,6 +46,14 @@ void setup() {
   digitalWrite(POWER_PIN, 0);
   // serial
   setupPrint();
+  // boot blink sequence -- 3 blinks in 3 secs
+  pinMode(LED_PIN, OUTPUT);
+  for (uint8_t i = 0; i < BOOT_WAIT; i++) {
+    digitalWrite(LED_PIN, 1);
+    delay(200);
+    digitalWrite(LED_PIN, 0);
+    delay(800);
+  }
   // DHCP
   uint8_t retry = 0;
   while (true) {
@@ -54,6 +68,8 @@ void setup() {
     if (retry >= DHCP_RETRIES) { 
       retry = 0;
       reboot();
+    } else {
+      delay(1000); 
     }
   }  
   displayIP();
@@ -104,7 +120,7 @@ void checkConnection() {
   Serial.println("}");
   connectStartTime = millis();
   if (!client.connect(server, 80)) { 
-     waitPrintln("[I:0 e1]");
+     reportError(1, "no connection");
      handleFailure();
      return;
   }
@@ -117,19 +133,33 @@ void checkConnection() {
   readingTimeout.reset(READING_TIME);
 }
 
+bool criticalFailure() {
+  return connectFail >= CONNECT_FAIL_REBOOT - 1;
+}
+
 void handleFailure() {
-   connectFail++;
-   if (connectFail >= CONNECT_FAIL_REBOOT) {
+  if (criticalFailure()) {
       connectFail = 0;
-      reboot();
-   }  
+      reboot();    
+  } else {
+    connectFail++;   
+  }  
+}
+
+void reportError(int code, char* msg) {
+  waitPrint();
+  Serial.print("[I:0 e");
+  Serial.print(code);
+  Serial.print("]");
+  Serial.print(msg);
+  if (criticalFailure()) Serial.print("*");
+  Serial.println();
 }
 
 void checkClientData() {
   if (!readingTimeout.enabled()) return; // not reading 
   if (readingTimeout.check()) {
-    // read timed out
-    waitPrintln("[I:0 e2}");
+    reportError(2, "timeout");
     client.stop();
     handleFailure();
     return;
@@ -150,14 +180,17 @@ void checkClientData() {
     client.stop();
     readingTimeout.disable();
     if (!expectFound) {
-      waitPrintln("[I:0 e3]");
+      reportError(3, "no data");
       handleFailure();
     } else {
       long delay = millis() - connectStartTime;
-      waitPrint();
-      Serial.print("[I:1 e0 d");
-      Serial.print(delay);
-      Serial.println("]");
+      if (statusTimeout.check()) {
+        waitPrint();
+        Serial.print("[I:1 e0 d");
+        Serial.print(delay);
+        Serial.println("]");
+        statusTimeout.reset(STATUS_TIME);
+      }
       connectFail = 0;
     }
   }
