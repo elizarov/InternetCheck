@@ -8,14 +8,17 @@
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
 const uint8_t LED_PIN = 13; // for boot indication
-const uint8_t BOOT_WAIT = 10; // wait & blink 10 sec on boot
-
 const uint8_t POWER_PIN = 3;
+const uint8_t W5100_RESET_PIN = A0;
+
+const uint8_t BOOT_WAIT = 3; // wait & blink 3 sec on boot
+
 const long REBOOT_TIME = 3000; // 3 sec -- with power off
-const long BOOT_WAIT_TIME = 10000; // 10 sec -- after power on
 
 const long DHCP_TIMEOUT = 30000; // 30 sec 
 const uint8_t DHCP_RETRIES = 4;
+
+bool initialized = false;
 
 char server[] = "apps.vsegda.org";
 EthernetClient client;
@@ -41,19 +44,27 @@ Timeout statusTimeout(0);
 long connectStartTime;
 
 void setup() {
-  // configure power pin (on)
+  pinMode(W5100_RESET_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
   pinMode(POWER_PIN, OUTPUT);
+  // configure power pin (on)
   digitalWrite(POWER_PIN, 0);
   // serial
   setupPrint();
+  waitPrintln("{I:InternetCheck}");
+}
+
+void checkInit() {
+  if (initialized) return;
   // boot blink sequence -- 3 blinks in 3 secs
-  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(W5100_RESET_PIN, 0);
   for (uint8_t i = 0; i < BOOT_WAIT; i++) {
     digitalWrite(LED_PIN, 1);
     delay(200);
     digitalWrite(LED_PIN, 0);
     delay(800);
   }
+  digitalWrite(W5100_RESET_PIN, 1);
   // DHCP
   uint8_t retry = 0;
   while (true) {
@@ -68,11 +79,13 @@ void setup() {
     if (retry >= DHCP_RETRIES) { 
       retry = 0;
       reboot();
+      return; // leave !initialized
     } else {
       delay(1000); 
     }
   }  
   displayIP();
+  initialized = true;  
 }
 
 void reboot() {
@@ -81,7 +94,7 @@ void reboot() {
   delay(REBOOT_TIME);
   digitalWrite(POWER_PIN, 0);  
   connectionTimeout.reset(REBOOT_GRACE_TIME);
-  delay(BOOT_WAIT_TIME);
+  initialized = false; // force W5100 init in next loop
 }
 
 void displayIP() {
@@ -92,6 +105,7 @@ void displayIP() {
 }
 
 void maintainDHCP() {
+  if (!initialized) return;
   switch (Ethernet.maintain()) {
     case 1: 
       waitPrintln("{I:DHCP renew failed}*");
@@ -111,6 +125,7 @@ void maintainDHCP() {
 }
 
 void checkConnection() {
+  if (!initialized) return;
   if (readingTimeout.enabled()) return; // reading from connectoin now
   if (!connectionTimeout.check()) return; // not time to reconnect yet
   connectionTimeout.reset(CONNECTION_CHECK_TIME);
@@ -157,6 +172,7 @@ void reportError(int code, char* msg) {
 }
 
 void checkClientData() {
+  if (!initialized) return;
   if (!readingTimeout.enabled()) return; // not reading 
   if (readingTimeout.check()) {
     reportError(2, "timeout");
@@ -197,6 +213,7 @@ void checkClientData() {
 }
 
 void loop() {
+  checkInit();
   maintainDHCP();
   checkConnection();
   checkClientData();  
