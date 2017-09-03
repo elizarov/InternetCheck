@@ -1,7 +1,7 @@
 #include <Timeout.h>
 
 #include <SPI.h>
-#include <Ethernet.h>
+#include <EthernetX.h>
 
 #include "xprint.h"
 
